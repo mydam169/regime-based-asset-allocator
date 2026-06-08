@@ -3,8 +3,7 @@ Preprocess monthly macroeconomic data into model-ready arrays.
 """
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler
-
+from sklearn.preprocessing import StandardScaler, RobustScaler
 
 def prepare_macro_data(macro_df, train_end_idx: int = None, drop_first: int = 0):
     """
@@ -37,7 +36,8 @@ def prepare_macro_data(macro_df, train_end_idx: int = None, drop_first: int = 0)
     X_raw_train = values[:train_end_idx]
     X_raw_test  = values[train_end_idx:] if train_end_idx < len(values) else None
 
-    scaler  = StandardScaler()
+    # scaler  = StandardScaler()
+    scaler = RobustScaler(quantile_range=(5, 95))  # more robust to outliers in macro data
     X_train = scaler.fit_transform(X_raw_train)
     X_test  = scaler.transform(X_raw_test) if X_raw_test is not None else None
 
