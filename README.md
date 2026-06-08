@@ -4,6 +4,8 @@
 
 A rigorous comparison of Gaussian HMM and MSMH-VAR(1) models for macroeconomic regime detection, applied to a three-asset tactical allocation portfolio (U.S. equities, Treasuries, gold). Estimated via Hamilton filter + Kim smoother (EM algorithm). Regime-conditional mean-variance optimization via cvxpy with Ledoit-Wolf and Bayes-Stein shrinkage.
 
+![Regime detection — MSVAR expansion/contraction states vs NBER recessions](assets/msvar_vix_nber_comparison.png)
+
 ------------------------------------------------------------------------
 
 ## Motivation
@@ -83,7 +85,7 @@ regime-based-asset-allocator/
 │   ├── plots.py            # Regime visualization + backtest dashboard
 │   ├── preprocess.py       # Standardization and train/test split
 │   ├── regime_mapping.py   # Regime-to-weight mapping
-│   ├── data_loader.py      # DuckDB-accelerated data loading
+│   ├── data_loader.py      # DuckDB-accelerated data loading if available
 │   └── constants.py        # Shared constants
 ├── tests/
 ├── outputs/
