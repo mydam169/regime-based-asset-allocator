@@ -2,7 +2,22 @@
 Regime-conditional portfolio optimization via mean-variance (MVO).
 
 Uses cvxpy for explicit, readable constraint specification.
-Ledoit-Wolf shrinkage is applied for covariance estimation.
+
+Shrinkage
+---------
+- Ledoit-Wolf shrinkage on covariance matrices  (all regimes)
+- Bayes-Stein shrinkage on expected return vectors (regime-conditional means
+  are shrunk toward the grand mean; particularly important for the recession
+  regime which typically has only 15-20 observations)
+
+Public API
+----------
+Core solver         : _solve_mvo()
+Moment estimation   : estimate_regime_moments()       — regime-conditional
+                      estimate_unconditional_moments() — full-sample (benchmark)
+Optimization loops  : optimize_regimes()              — GMV + max-Sharpe per regime
+Benchmark builder   : build_unconditional_portfolio() — fixed-weight MVO benchmark
+Frontier tracer     : MeanVariancePortfolio           — parametric EF + summary table
 """
 
 import numpy as np
@@ -25,27 +40,28 @@ class PortfolioResult:
     exp_return : float
     volatility : float
     sharpe     : float
-    regime     : int
+    regime     : int        # None for regime-agnostic (unconditional) portfolios
     portfolio  : str
     asset_names: list
 
     def summary(self):
-        ann = 12
+        ann  = 12
+        sqan = np.sqrt(ann)
         print(f"\n── {self.portfolio}  |  Regime {self.regime} ──")
-        print(f"  Expected return (ann.) : {self.exp_return * ann * 100:+.2f}%")
-        print(f"  Volatility     (ann.) : {self.volatility * np.sqrt(ann) * 100:.2f}%")
-        print(f"  Sharpe ratio          : {self.sharpe * np.sqrt(ann):.4f}")
+        print(f"  Expected return (ann.) : {self.exp_return * ann  * 100:+.2f}%")
+        print(f"  Volatility     (ann.) : {self.volatility * sqan  * 100:.2f}%")
+        print(f"  Sharpe ratio          : {self.sharpe     * sqan:.4f}")
         print(f"  Weights:")
         for name, w in zip(self.asset_names, self.weights):
-            print(f"    {name:<12}: {w:.4f}  ({w*100:.1f}%)")
+            print(f"    {name:<14}: {w:.4f}  ({w*100:.1f}%)")
 
 
 # ---------------------------------------------------------------------------
-# MVO core solver
+# MVO core solver  (private — called by all public functions)
 # ---------------------------------------------------------------------------
 
 def _constraints(w, n, long_only, max_weight):
-    """Standard MVO constraint list."""
+    """Standard MVO constraint set: full investment + optional long-only + cap."""
     cons = [cp.sum(w) == 1]
     if long_only:
         cons.append(w >= 0)
@@ -58,24 +74,26 @@ def _solve_mvo(mu, Sigma, objective='min_variance',
                rf=0.0, gamma=3.0,
                long_only=True, max_weight=1.0) -> np.ndarray:
     """
-    Solve a single MVO problem using cvxpy.
+    Solve a single MVO problem using cvxpy + CLARABEL solver.
 
     Objectives
     ----------
-    'min_variance'  — global minimum variance portfolio (QP)
-    'max_sharpe'    — max Sharpe via Cornuejols-Tütüncü substitution (QP)
-    'max_return'    — maximise mean-variance utility w'μ - (γ/2)w'Σw (QP)
+    'min_variance'  — global minimum-variance portfolio (GMV).
+                      No return target; minimises w'Σw subject to
+                      full-investment and optional long-only constraints.
 
-    Constraints
-    -----------
-    Full investment (w sums to 1), long-only (w >= 0), max_weight per asset.
+    'max_sharpe'    — maximum Sharpe ratio (tangency) portfolio.
+                      Solved via the Cornuejols-Tütüncü variable substitution
+                      y = w/(w'(μ−rf)), κ = 1/(w'(μ−rf)) which converts the
+                      fractional program into a convex QP.
 
     Returns
     -------
-    (n,) optimal weight vector; equal-weight fallback on solver failure.
+    (n,) optimal weight vector.
+    Falls back to equal weights if the solver fails.
     """
     n     = len(mu)
-    Sigma = 0.5 * (np.array(Sigma) + np.array(Sigma).T)
+    Sigma = 0.5 * (np.array(Sigma) + np.array(Sigma).T)   # enforce symmetry
 
     if objective == 'min_variance':
         w    = cp.Variable(n)
@@ -83,7 +101,10 @@ def _solve_mvo(mu, Sigma, objective='min_variance',
                           _constraints(w, n, long_only, max_weight))
 
     elif objective == 'max_sharpe':
-        # Tobin substitution: y = w / (w'(μ-rf)), κ = 1 / (w'(μ-rf))
+        # Tobin / Cornuejols-Tütüncü substitution:
+        #   y = w / (w'(μ-rf)),   κ = 1 / (w'(μ-rf))
+        # Minimise y'Σy  s.t.  (μ-rf)'y = 1,  Σy = κ,  κ ≥ 0
+        # Recover weights as w = y / κ
         y, kap    = cp.Variable(n), cp.Variable()
         excess_mu = mu - rf
         cons = [excess_mu @ y == 1, cp.sum(y) == kap, kap >= 0]
@@ -94,18 +115,17 @@ def _solve_mvo(mu, Sigma, objective='min_variance',
         prob = cp.Problem(cp.Minimize(cp.quad_form(y, Sigma)), cons)
         prob.solve(solver=cp.CLARABEL)
         if prob.status in ('optimal', 'optimal_inaccurate') and kap.value > 1e-10:
-            w_opt = np.clip(y.value / kap.value, 0 if long_only else -np.inf, max_weight)
+            w_opt = np.clip(y.value / kap.value,
+                            0 if long_only else -np.inf, max_weight)
             return w_opt / w_opt.sum()
+        print("  Warning: max_sharpe solver failed — returning equal weights.")
         return np.ones(n) / n
 
-    elif objective == 'max_return':
-        w    = cp.Variable(n)
-        prob = cp.Problem(
-            cp.Minimize(0.5 * gamma * cp.quad_form(w, Sigma) - mu @ w),
-            _constraints(w, n, long_only, max_weight)
-        )
     else:
-        raise ValueError(f"Unknown objective '{objective}'")
+        raise ValueError(
+            f"Unknown objective '{objective}'. "
+            f"Valid options: 'min_variance', 'max_sharpe'."
+        )
 
     prob.solve(solver=cp.CLARABEL)
     if prob.status in ('optimal', 'optimal_inaccurate') and w.value is not None:
@@ -117,57 +137,276 @@ def _solve_mvo(mu, Sigma, objective='min_variance',
 
 
 # ---------------------------------------------------------------------------
-# Regime-conditional moment estimation
+# Bayes-Stein mean shrinkage
 # ---------------------------------------------------------------------------
 
-def estimate_regime_moments(df_train, asset_cols, state_col='state') -> dict:
+def bayes_stein_shrinkage(mu_k: np.ndarray,
+                           sigma_k: np.ndarray,
+                           n_obs: int,
+                           mu_global: np.ndarray) -> tuple:
     """
-    Estimate state-conditional means and covariance matrices via Ledoit-Wolf.
+    Shrink a regime-conditional sample mean toward the grand mean.
+
+    Reference: Jorion (1986), "Bayes-Stein Estimation for Portfolio Analysis",
+    Journal of Financial and Quantitative Analysis.
+
+    Motivation: When the number of observations in a regime is small, the sample mean is an unreliable estimate
+    of the true conditional mean.  The Bayes-Stein estimator treats mu_global
+    as an informative prior and blends the sample mean toward it with intensity
+    phi inversely proportional to the number of observations:
+
+        mu_BS = (1 - phi) * mu_sample  +  phi * mu_global
+
+    where phi → 1 when n_obs is small (heavy shrinkage to the prior) and
+    phi → 0 when n_obs is large (sample mean dominates).
 
     Parameters
     ----------
-    df_train   : pd.DataFrame with state and asset columns
-    asset_cols : list of str — asset return column names
-    state_col  : str — name of the state column
+    mu_k      : (n,) regime-conditional sample mean
+    sigma_k   : (n,n) regime-conditional Ledoit-Wolf covariance
+    n_obs     : number of asset-return observations in regime k
+    mu_global : (n,) grand mean across all regimes (the shrinkage target),
+                computed as an observation-count-weighted average
 
     Returns
     -------
-    dict {k: {'mu', 'sigma', 'sigma_raw', 'shrinkage', 'n_obs'}}
+    mu_bs : (n,) shrunk mean estimate used for portfolio optimisation
+    phi   : float in [0, 1] — shrinkage intensity;
+            phi ≈ 1 → dominated by prior (few observations)
+            phi ≈ 0 → dominated by sample mean (many observations)
     """
-    moments = {}
-    for k in sorted(df_train[state_col].unique()):
-        R_k    = df_train.loc[df_train[state_col] == k, asset_cols].values
-        T_k, n = R_k.shape
-        mu_k   = R_k.mean(axis=0)
-        lw     = LedoitWolf().fit(R_k)
+    n    = len(mu_k)
+    diff = mu_k - mu_global
 
-        moments[k] = {
-            'mu':        mu_k,
-            'sigma':     lw.covariance_,
-            'sigma_raw': np.cov(R_k, rowvar=False),
-            'shrinkage': lw.shrinkage_,
-            'n_obs':     T_k,
+    # Mahalanobis distance of mu_k from the prior mu_global
+    try:
+        sigma_inv = np.linalg.inv(sigma_k)
+        mahal     = float(diff @ sigma_inv @ diff)
+    except np.linalg.LinAlgError:
+        # Sigma is singular (can happen with very few observations);
+        # fall back to Euclidean distance
+        mahal = float(diff @ diff)
+
+    # Jorion (1986) eq. 14:  phi = (n+2) / (n_obs * mahal + n + 2)
+    # Clipped to [0, 1] for numerical safety
+    phi  = (n + 2) / (n_obs * mahal + n + 2)
+    phi  = float(np.clip(phi, 0.0, 1.0))
+
+    mu_bs = (1.0 - phi) * mu_k + phi * mu_global
+    return mu_bs, phi
+
+
+# ---------------------------------------------------------------------------
+# Regime-conditional moment estimation
+# ---------------------------------------------------------------------------
+
+def estimate_regime_moments(df_train, asset_cols, state_col='state',
+                             use_bayes_stein: bool = True) -> dict:
+    """
+    Estimate state-conditional means and covariance matrices.
+
+    Covariance : Ledoit-Wolf shrinkage (scikit-learn).
+    Mean       : Bayes-Stein shrinkage toward the grand mean (Jorion 1986).
+                 Controlled by use_bayes_stein (default True).
+
+    The output dict carries both the shrunk mean ('mu', used for MVO) and
+    the raw sample mean ('mu_sample', kept for diagnostics), plus the
+    Bayes-Stein shrinkage intensity ('mu_bs_phi') so callers can see how
+    heavily each regime's mean was adjusted.
+
+    Parameters
+    ----------
+    df_train        : pd.DataFrame with state and asset return columns
+    asset_cols      : list of str — asset return column names
+    state_col       : str — name of the integer state column
+    use_bayes_stein : bool — apply Bayes-Stein to means (default True)
+
+    Returns
+    -------
+    dict {k: {'mu', 'mu_sample', 'mu_bs_phi',
+              'sigma', 'sigma_raw', 'lw_shrinkage', 'n_obs'}}
+    """
+    # ── Pass 1: raw moment estimates per regime ───────────────────────────────
+    raw = {}
+    for k in sorted(df_train[state_col].unique()):
+        R_k      = df_train.loc[df_train[state_col] == k, asset_cols].values
+        T_k, _   = R_k.shape
+        mu_k     = R_k.mean(axis=0)
+        lw       = LedoitWolf().fit(R_k)
+        raw[k]   = {
+            'R':           R_k,
+            'mu_sample':   mu_k,
+            'sigma':       lw.covariance_,
+            'sigma_raw':   np.cov(R_k, rowvar=False),
+            'lw_shrinkage': lw.shrinkage_,
+            'n_obs':       T_k,
         }
 
-        print(f"\n── Regime {k}  ({T_k} observations) ──")
-        print(f"  Mean returns (annualized %):")
-        for col, m in zip(asset_cols, mu_k * 12 * 100):
-            print(f"    {col:<12}: {m:+.2f}%")
-        print(f"  Ledoit-Wolf shrinkage α : {lw.shrinkage_:.4f}")
-        print(f"  Implied annual volatilities:")
-        for col, v in zip(asset_cols, np.sqrt(np.diag(lw.covariance_) * 12) * 100):
-            print(f"    {col:<12}: {v:.2f}%")
+    # ── Grand mean: observation-count-weighted pooled mean ───────────────────
+    # Used as the Bayes-Stein shrinkage target.
+    # Weighting by n_obs gives more influence to the dominant (expansion) regime.
+    total_obs = sum(v['n_obs'] for v in raw.values())
+    mu_global = sum(
+        v['n_obs'] * v['mu_sample'] for v in raw.values()
+    ) / total_obs
+
+    # ── Pass 2: apply Bayes-Stein, build output dict ─────────────────────────
+    moments = {}
+    for k, r in raw.items():
+        if use_bayes_stein:
+            mu_final, phi = bayes_stein_shrinkage(
+                r['mu_sample'], r['sigma'], r['n_obs'], mu_global
+            )
+        else:
+            mu_final, phi = r['mu_sample'], 0.0
+
+        moments[k] = {
+            'mu':           mu_final,      # shrunk mean  → used for MVO
+            'mu_sample':    r['mu_sample'],# raw sample mean → diagnostics only
+            'mu_bs_phi':    phi,           # Bayes-Stein intensity
+            'sigma':        r['sigma'],    # Ledoit-Wolf covariance
+            'sigma_raw':    r['sigma_raw'],
+            'lw_shrinkage': r['lw_shrinkage'],
+            'n_obs':        r['n_obs'],
+        }
+
+        # ── Per-regime diagnostics ────────────────────────────────────────────
+        print(f"\n── Regime {k}  ({r['n_obs']} observations) ──")
+        print(f"  Mean returns — sample vs Bayes-Stein (annualized %):")
+        for col, m_raw, m_bs in zip(
+            asset_cols,
+            r['mu_sample'] * 12 * 100,
+            mu_final       * 12 * 100,
+        ):
+            print(f"    {col:<16}: sample {m_raw:+.2f}%  →  BS {m_bs:+.2f}%")
+        if use_bayes_stein:
+            intensity = 'heavy' if phi > 0.5 else 'mild'
+            print(f"  Bayes-Stein φ  : {phi:.4f}  ({intensity} shrinkage)")
+        print(f"  Ledoit-Wolf α  : {r['lw_shrinkage']:.4f}")
+        print(f"  Implied annual volatilities (shrunk Σ):")
+        for col, v in zip(
+            asset_cols,
+            np.sqrt(np.diag(r['sigma']) * 12) * 100,
+        ):
+            print(f"    {col:<16}: {v:.2f}%")
 
     return moments
 
 
 def shrinkage_diagnostics(moments, asset_cols):
-    """Print the difference between shrunk and raw covariance per regime."""
-    print("\n── Difference between shrunk and raw covariance ──")
+    """Print the difference between Ledoit-Wolf and raw covariance per regime."""
+    print("\n── Ledoit-Wolf shrinkage effect (shrunk Σ − raw Σ) ──")
     for k, m in moments.items():
         diff = m['sigma'] - m['sigma_raw']
-        print(f"\nRegime {k}  (α = {m['shrinkage']:.4f}):")
+        print(f"\nRegime {k}  (α = {m['lw_shrinkage']:.4f}):")
         print(_fmt_matrix(diff, list(asset_cols)))
+
+
+# ---------------------------------------------------------------------------
+# Unconditional moment estimation  (regime-agnostic benchmark)
+# ---------------------------------------------------------------------------
+
+def estimate_unconditional_moments(df_returns, asset_cols) -> dict:
+    """
+    Estimate full-sample means and covariance ignoring regime labels.
+
+    Purpose
+    -------
+    Provides the inputs for the regime-agnostic MVO benchmark portfolio.
+    This is the most direct test of whether regime detection adds value:
+    if the regime-switching strategies cannot beat a fixed portfolio that
+    is optimally constructed on unconditional moments, the regime detection
+    machinery adds no incremental value.
+
+    Covariance: Ledoit-Wolf shrinkage on the full training sample.
+    Mean: raw sample mean (no Bayes-Stein — there is no prior to shrink toward
+          when regimes are ignored).
+
+    Parameters
+    ----------
+    df_returns : pd.DataFrame of asset returns (no state column needed)
+    asset_cols : list of str
+
+    Returns
+    -------
+    dict with keys 'mu', 'sigma', 'sigma_raw', 'lw_shrinkage', 'n_obs'
+    """
+    R    = df_returns[list(asset_cols)].values
+    T, _ = R.shape
+    mu   = R.mean(axis=0)
+    lw   = LedoitWolf().fit(R)
+
+    print(f"\n── Unconditional moments  ({T} observations, all regimes pooled) ──")
+    print(f"  Mean returns (annualized %):")
+    for col, m in zip(asset_cols, mu * 12 * 100):
+        print(f"    {col:<16}: {m:+.2f}%")
+    print(f"  Ledoit-Wolf α  : {lw.shrinkage_:.4f}")
+    print(f"  Implied annual volatilities:")
+    for col, v in zip(asset_cols, np.sqrt(np.diag(lw.covariance_) * 12) * 100):
+        print(f"    {col:<16}: {v:.2f}%")
+
+    return {
+        'mu':           mu,
+        'sigma':        lw.covariance_,
+        'sigma_raw':    np.cov(R, rowvar=False),
+        'lw_shrinkage': lw.shrinkage_,
+        'n_obs':        T,
+    }
+
+
+def build_unconditional_portfolio(df_train_returns, asset_cols,
+                                   rf: float = 0.0,
+                                   long_only: bool = True,
+                                   max_weight: float = 1.0,
+                                   objective: str = 'max_sharpe') -> 'PortfolioResult':
+    """
+    Build a fixed-weight MVO portfolio from unconditional moments.
+
+    This portfolio is estimated once on training data and held fixed
+    throughout the test period — it is the regime-agnostic MVO benchmark.
+
+    The comparison to include in the backtest notebook is:
+        HMM GMV     — regime-switching, minimum variance
+        HMM MVO     — regime-switching, maximum Sharpe
+        MSVAR GMV   — regime-switching, minimum variance
+        MSVAR MVO   — regime-switching, maximum Sharpe
+        Uncond. MVO — fixed weights, unconditional max-Sharpe  ← this function
+        60/40       — fixed weights, naive
+        Equal-weight— fixed weights, naive
+        Buy & Hold  — fixed weights, naive
+
+    Parameters
+    ----------
+    df_train_returns : pd.DataFrame of training-period asset returns
+                       (no state column; covers all regimes pooled)
+    asset_cols       : list of str
+    rf               : monthly risk-free rate (default 0)
+    long_only        : bool (default True)
+    max_weight       : per-asset upper bound (default 1.0 = unconstrained)
+    objective        : 'max_sharpe' or 'min_variance' (default 'max_sharpe')
+
+    Returns
+    -------
+    PortfolioResult with regime=None
+    """
+    mom     = estimate_unconditional_moments(df_train_returns, asset_cols)
+    w       = _solve_mvo(mom['mu'], mom['sigma'], objective=objective,
+                         rf=rf, long_only=long_only, max_weight=max_weight)
+    exp_ret = float(w @ mom['mu'])
+    vol     = float(np.sqrt(w @ mom['sigma'] @ w))
+    sharpe  = (exp_ret - rf) / vol if vol > 1e-12 else 0.0
+
+    result = PortfolioResult(
+        weights     = w,
+        exp_return  = exp_ret,
+        volatility  = vol,
+        sharpe      = sharpe,
+        regime      = None,
+        portfolio   = f'Unconditional MVO ({objective})',
+        asset_names = list(asset_cols),
+    )
+    result.summary()
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -177,293 +416,44 @@ def shrinkage_diagnostics(moments, asset_cols):
 def optimize_regimes(moments, asset_names,
                      rf=0.0, long_only=True, max_weight=1.0) -> dict:
     """
-    Solve MVO for each regime across three objectives.
+    Solve MVO for each regime for the two reported objectives.
+
+    Objectives
+    ----------
+    'min_variance' — GMV: reported as the primary result throughout the paper.
+    'max_sharpe'   — Tangency: reported in the Appendix (MVO comparison).
+
+    Note: 'max_return' (mean-variance utility) has been removed.  It was
+    computed in the original code but never exported to CSV, never used in
+    backtesting, and not reported in the paper.  Removing it keeps the
+    results dict clean and avoids confusion.
+
+    Parameters
+    ----------
+    moments     : dict from estimate_regime_moments()
+    asset_names : array-like of str
+    rf          : monthly risk-free rate
+    long_only   : bool
+    max_weight  : per-asset upper bound
 
     Returns
     -------
-    dict {k: {'min_variance', 'max_sharpe', 'max_return'}: PortfolioResult}
+    dict {k: {'min_variance': PortfolioResult, 'max_sharpe': PortfolioResult}}
     """
     results = {}
     for k, m in moments.items():
         results[k] = {}
-        for obj in ('min_variance', 'max_sharpe', 'max_return'):
+        for obj in ('min_variance', 'max_sharpe'):
             w_opt   = _solve_mvo(m['mu'], m['sigma'], objective=obj,
-                                  rf=rf, long_only=long_only, max_weight=max_weight)
-            exp_ret = w_opt @ m['mu']
-            vol     = np.sqrt(w_opt @ m['sigma'] @ w_opt)
+                                  rf=rf, long_only=long_only,
+                                  max_weight=max_weight)
+            exp_ret = float(w_opt @ m['mu'])
+            vol     = float(np.sqrt(w_opt @ m['sigma'] @ w_opt))
             sharpe  = (exp_ret - rf) / vol if vol > 1e-12 else 0.0
-            res = PortfolioResult(w_opt, exp_ret, vol, sharpe, k, obj, list(asset_names))
+            res     = PortfolioResult(
+                w_opt, exp_ret, vol, sharpe, k, obj, list(asset_names)
+            )
             results[k][obj] = res
             res.summary()
     return results
 
-
-# ---------------------------------------------------------------------------
-# Efficient frontier
-# ---------------------------------------------------------------------------
-
-def efficient_frontier(mu, Sigma, asset_names, regime,
-                       n_points=50, long_only=True, rf=0.0):
-    """
-    Trace the efficient frontier by sweeping risk aversion γ (log scale).
-
-    Returns
-    -------
-    frontier : pd.DataFrame with columns ['volatility', 'exp_return', 'sharpe']
-    weights  : (n_points, n) array of portfolio weights
-    """
-    gammas = np.logspace(3, -1, n_points)
-    vols, rets, sharpes, ws = [], [], [], []
-
-    for gamma in gammas:
-        w   = _solve_mvo(mu, Sigma, objective='max_return',
-                          gamma=gamma, long_only=long_only)
-        ret = w @ mu
-        vol = np.sqrt(w @ Sigma @ w)
-        vols.append(vol)
-        rets.append(ret)
-        sharpes.append((ret - rf) / vol if vol > 1e-12 else 0.0)
-        ws.append(w)
-
-    return pd.DataFrame({'volatility': vols, 'exp_return': rets,
-                         'sharpe': sharpes}), np.array(ws)
-
-
-# ---------------------------------------------------------------------------
-# MeanVariancePortfolio — clean public API over the MVO solver
-# ---------------------------------------------------------------------------
-
-class MeanVariancePortfolio:
-    """
-    Markowitz mean-variance portfolio optimizer for a single regime.
-
-    Wraps ``_solve_mvo`` in a clean, named interface and traces the
-    efficient frontier via a parametric target-return sweep (more
-    accurate than the γ-grid approximation in ``efficient_frontier``).
-
-    Parameters
-    ----------
-    mu          : (n,) array — expected monthly returns
-    Sigma       : (n,n) array — monthly covariance matrix
-    asset_names : list[str]
-    rf          : float — monthly risk-free rate (default 0)
-    long_only   : bool — enforce w ≥ 0 (default True)
-    max_weight  : float — per-asset upper bound, 1.0 = unconstrained
-    regime      : int | None — regime label attached to results
-    """
-
-    def __init__(self, mu, Sigma, asset_names,
-                 rf=0.0, long_only=True, max_weight=1.0, regime=None):
-        self.mu          = np.asarray(mu, dtype=float)
-        self.Sigma       = 0.5 * (np.asarray(Sigma) + np.asarray(Sigma).T)
-        self.asset_names = list(asset_names)
-        self.rf          = rf
-        self.long_only   = long_only
-        self.max_weight  = max_weight
-        self.regime      = regime
-        self.n           = len(self.mu)
-
-    # ── helpers ─────────────────────────────────────────────────────────────
-
-    def _wrap(self, w, label):
-        """Clip, normalise, compute metrics, return PortfolioResult."""
-        w   = np.clip(w, 0.0 if self.long_only else -np.inf, self.max_weight)
-        w  /= w.sum()
-        ret = float(w @ self.mu)
-        vol = float(np.sqrt(w @ self.Sigma @ w))
-        sr  = (ret - self.rf) / vol if vol > 1e-12 else 0.0
-        return PortfolioResult(w, ret, vol, sr, self.regime, label, self.asset_names)
-
-    # ── named portfolios ────────────────────────────────────────────────────
-
-    def global_min_variance(self) -> PortfolioResult:
-        """Global minimum-variance (GMV) portfolio."""
-        w = _solve_mvo(self.mu, self.Sigma, 'min_variance',
-                       long_only=self.long_only, max_weight=self.max_weight)
-        return self._wrap(w, 'GMV')
-
-    def tangency(self) -> PortfolioResult:
-        """Maximum Sharpe ratio (tangency) portfolio."""
-        w = _solve_mvo(self.mu, self.Sigma, 'max_sharpe', rf=self.rf,
-                       long_only=self.long_only, max_weight=self.max_weight)
-        return self._wrap(w, 'Tangency')
-
-    def max_utility(self, gamma: float = 3.0) -> PortfolioResult:
-        """Mean-variance utility portfolio: max w′μ − (γ/2)w′Σw."""
-        w = _solve_mvo(self.mu, self.Sigma, 'max_return', gamma=gamma,
-                       long_only=self.long_only, max_weight=self.max_weight)
-        return self._wrap(w, f'MaxUtility(γ={gamma})')
-
-    def target_return(self, target_mu: float) -> PortfolioResult:
-        """
-        Minimum-variance portfolio subject to expected return ≥ target_mu.
-
-        This is the standard parametric efficient-frontier solve.
-        Falls back to equal weights if the target is infeasible.
-        """
-        w_var = cp.Variable(self.n)
-        cons  = [cp.sum(w_var) == 1, self.mu @ w_var >= target_mu]
-        if self.long_only:
-            cons.append(w_var >= 0)
-        if self.max_weight < 1.0:
-            cons.append(w_var <= self.max_weight)
-        prob = cp.Problem(cp.Minimize(cp.quad_form(w_var, self.Sigma)), cons)
-        prob.solve(solver=cp.CLARABEL)
-        if prob.status in ('optimal', 'optimal_inaccurate') and w_var.value is not None:
-            return self._wrap(w_var.value, f'TargetReturn({target_mu:.5f})')
-        return self._wrap(np.ones(self.n) / self.n, 'FallbackEW')
-
-    # ── efficient frontier ───────────────────────────────────────────────────
-
-    def efficient_frontier(self, n_points: int = 60):
-        """
-        Trace the efficient frontier via parametric target-return sweep.
-
-        Returns target returns from the GMV expected return (minimum
-        achievable) up to the maximum feasible expected return, solving
-        a min-variance QP at each target.
-
-        Returns
-        -------
-        frontier : pd.DataFrame — annualised volatility, exp_return, sharpe
-        weights  : (n_points, n) ndarray — corresponding portfolio weights
-        """
-        gmv    = self.global_min_variance()
-        mu_min = gmv.exp_return
-
-        # Upper bound: near-max-return via very low risk aversion
-        w_max  = _solve_mvo(self.mu, self.Sigma, 'max_return', gamma=0.01,
-                            long_only=self.long_only, max_weight=self.max_weight)
-        mu_max = float(w_max @ self.mu)
-
-        if mu_max <= mu_min + 1e-10:
-            mu_max = mu_min + abs(mu_min) * 0.5 + 1e-6
-
-        targets = np.linspace(mu_min, mu_max, n_points)
-        vols, rets, sharpes, ws = [], [], [], []
-        for tgt in targets:
-            res = self.target_return(tgt)
-            vols.append(res.volatility * np.sqrt(12))
-            rets.append(res.exp_return * 12)
-            sharpes.append(res.sharpe * np.sqrt(12))
-            ws.append(res.weights)
-
-        return (
-            pd.DataFrame({'volatility': vols, 'exp_return': rets, 'sharpe': sharpes}),
-            np.array(ws),
-        )
-
-    def summary_table(self, gamma: float = 3.0) -> pd.DataFrame:
-        """
-        Return a DataFrame comparing GMV, Tangency, and Max-Utility portfolios
-        with annualised metrics and per-asset weights.
-        """
-        portfolios = {
-            'GMV':         self.global_min_variance(),
-            'Tangency':    self.tangency(),
-            f'MaxUtil(γ={gamma})': self.max_utility(gamma),
-        }
-        rows = {}
-        for label, res in portfolios.items():
-            row = {
-                'Ann. Return (%)':  res.exp_return * 12 * 100,
-                'Ann. Volatility (%)': res.volatility * np.sqrt(12) * 100,
-                'Sharpe Ratio':     res.sharpe * np.sqrt(12),
-            }
-            for name, w in zip(self.asset_names, res.weights):
-                row[name] = w
-            rows[label] = row
-        return pd.DataFrame(rows).T
-
-
-def bayes_stein_shrink_mean(mu, sigma, n_obs):
-    """
-    Bayes-Stein shrinkage of sample means toward the GMV-implied flat forecast.
-
-    Parameters
-    ----------
-    mu : array-like
-        Sample mean return vector.
-    sigma : array-like
-        Covariance matrix.
-    n_obs : int
-        Number of observations used to estimate the mean.
-
-    Returns
-    -------
-    shrunk_mu : np.ndarray
-        Bayes-Stein shrunk mean vector.
-    shrinkage : float
-        Shrinkage intensity between 0 and 1.
-    target_mean : float
-        GMV-implied flat forecast target.
-    """
-    mu = np.asarray(mu, dtype=float)
-    sigma = np.asarray(sigma, dtype=float)
-
-    n_assets = len(mu)
-    ones = np.ones(n_assets)
-    inv_sigma = np.linalg.pinv(sigma)
-
-    target_mean = float((ones @ inv_sigma @ mu) / (ones @ inv_sigma @ ones))
-
-    distance = float(
-        (mu - target_mean * ones).T
-        @ inv_sigma
-        @ (mu - target_mean * ones)
-    )
-
-    if distance <= 0:
-        shrinkage = 1.0
-    else:
-        shrinkage = (n_assets + 2) / ((n_assets + 2) + n_obs * distance)
-
-    shrinkage = float(np.clip(shrinkage, 0.0, 1.0))
-    shrunk_mu = (1.0 - shrinkage) * mu + shrinkage * target_mean * ones
-
-    return shrunk_mu, shrinkage, target_mean
-
-
-def bayes_stein_tangency_portfolio(
-    mu,
-    sigma,
-    n_obs,
-    asset_names,
-    rf=0.0,
-    long_only=True,
-    max_weight=1.0,
-    regime=None,
-):
-    """
-    Compute the Bayes-Stein tangency portfolio for one regime.
-
-    Returns
-    -------
-    result : PortfolioResult
-        Tangency portfolio result based on Bayes-Stein shrunk means.
-    shrunk_mu : np.ndarray
-        Bayes-Stein shrunk mean vector.
-    shrinkage : float
-        Bayes-Stein shrinkage intensity.
-    target_mean : float
-        GMV-implied flat forecast target.
-    """
-    shrunk_mu, shrinkage, target_mean = bayes_stein_shrink_mean(
-        mu=mu,
-        sigma=sigma,
-        n_obs=n_obs,
-    )
-
-    optimizer = MeanVariancePortfolio(
-        mu=shrunk_mu,
-        Sigma=sigma,
-        asset_names=asset_names,
-        rf=rf,
-        long_only=long_only,
-        max_weight=max_weight,
-        regime=regime,
-    )
-
-    result = optimizer.tangency()
-
-    return result, shrunk_mu, shrinkage, target_mean
