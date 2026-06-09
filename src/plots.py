@@ -180,58 +180,6 @@ def plot_series_shaded(df, series_name, state_col, recession_state: int = 1, ax=
 
 
 # ---------------------------------------------------------------------------
-# Efficient frontier plot
-# ---------------------------------------------------------------------------
-
-def plot_frontiers(moments, asset_names, results,
-                   rf=0.0, long_only=True, freq='monthly',
-                   recession_state: int = 1):
-    """
-    Plot efficient frontiers for both regimes with marked portfolios.
-
-    Parameters
-    ----------
-    moments        : dict {k: {'mu', 'sigma'}}
-    asset_names    : list of str
-    results        : dict from portfolio.optimize_regimes()
-    recession_state: which regime index is recession (affects legend labels)
-    """
-    from .portfolio import efficient_frontier as _ef
-
-    ann  = 12 if freq == 'monthly' else 1
-    sqan = np.sqrt(ann)
-    colors = _state_colors(recession_state)
-    labels = {
-        k: f'Regime {k} — {"Recession" if k == recession_state else "Expansion"}'
-        for k in [0, 1]
-    }
-
-    fig, ax = plt.subplots(figsize=(9, 6))
-
-    for k, m in moments.items():
-        frontier, _ = _ef(m['mu'], m['sigma'], asset_names,
-                          regime=k, long_only=long_only, rf=rf)
-        ax.plot(frontier['volatility'] * sqan * 100,
-                frontier['exp_return'] * ann  * 100,
-                color=colors[k], lw=2, label=labels[k])
-
-        for pname, marker, ms in [('min_variance', 'o', 9), ('max_sharpe', '*', 13)]:
-            r = results[k][pname]
-            ax.scatter(r.volatility * sqan * 100, r.exp_return * ann * 100,
-                       color=colors[k], marker=marker, s=ms**2, zorder=5,
-                       label=f"{labels[k]} — {pname.replace('_', ' ')}")
-
-    ax.set_xlabel('Annualized Volatility (%)', fontsize=11)
-    ax.set_ylabel('Annualized Expected Return (%)', fontsize=11)
-    ax.set_title('Efficient Frontiers by Regime', fontsize=12, fontweight='bold')
-    ax.legend(fontsize=8, loc='lower right')
-    ax.spines[['top', 'right']].set_visible(False)
-    ax.grid(linestyle='--', linewidth=0.5, alpha=0.5)
-    plt.tight_layout()
-    return fig
-
-
-# ---------------------------------------------------------------------------
 # Backtest dashboard
 # ---------------------------------------------------------------------------
 
