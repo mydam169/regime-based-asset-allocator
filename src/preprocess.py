@@ -81,10 +81,10 @@ def apply_pca(X_train: np.ndarray,
     n = X_train.shape[1]
 
     if n_components is not None:
-        pca = PCA(n_componenents=n_components, random_state=42)
+        pca = PCA(n_components=n_components, random_state=42)
         X_train_pca = pca.fit_transform(X_train)
     else:
-        pca_full = PCA(n_components=variance_threshold, random_state=42)
+        pca_full = PCA(n_components=n, random_state=42)
         pca_full.fit(X_train)
         cumvar = pca_full.explained_variance_ratio_.cumsum()
 
