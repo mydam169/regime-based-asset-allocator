@@ -1,6 +1,0 @@
-Strategy,Signal Start Date,Realized Return Start Date,Realized Return End Date,Number of Return Observations
-HMM,2018-10-31,2018-12-31,2025-12-31,85
-MSVAR,2018-11-30,2018-12-31,2025-12-31,85
-60_40,,2018-12-31,2025-12-31,85
-Equal_Weight,,2018-12-31,2025-12-31,85
-Buy_Hold_Equity,,2018-12-31,2025-12-31,85
