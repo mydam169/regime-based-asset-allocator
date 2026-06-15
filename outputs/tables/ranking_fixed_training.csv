@@ -1,7 +1,0 @@
-,Annualized Return,Annualized Volatility,Sharpe Ratio,Sortino Ratio,Max Drawdown,VaR 95% (monthly),CVaR 95% (monthly)
-HMM GMV (FT),6,4,5,5,3,4,4
-MSVAR GMV (FT),3,3,3,2,5,2,3
-Uncond. GMV (FT),4,2,4,4,4,3,2
-60_40 (FT),5,5,6,6,1,5,5
-Equal_Weight (FT),2,1,1,1,6,1,1
-Buy_Hold (FT),1,6,2,3,2,6,6
