@@ -402,7 +402,7 @@ def build_unconditional_portfolio(df_train_returns, asset_cols,
         volatility  = vol,
         sharpe      = sharpe,
         regime      = None,
-        portfolio   = f'Unconditional MVO ({objective})',
+        portfolio   = 'Unconditional GMV' if objective == 'min_variance' else 'Unconditional MVO',
         asset_names = list(asset_cols),
     )
     result.summary()

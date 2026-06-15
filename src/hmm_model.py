@@ -45,7 +45,7 @@ class HMMRegimeModel:
     def __init__(self, n_states: int = 2, n_iter: int = 200,
                  n_restarts: int = 10, tol: float = 1e-4,
                  random_state: int = 42,
-                 covariance_type: str = 'diag', # change from diag to full 
+                 covariance_type: str = 'full', # change from diag to full 
                  constrain_transmat: bool = True):
         self.n_states           = n_states
         self.n_iter             = n_iter
@@ -150,9 +150,13 @@ class HMMRegimeModel:
         if np.array_equal(order, np.arange(self.n_states)):
             return model   # already correctly ordered — nothing to do
 
-        # Permute all state-indexed parameters
+        # Permute all state-indexed parameters.
+        # Use _covars_ directly: the covars_ getter calls fill_covars() which
+        # expands 'diag' storage (n_components, n_features) into full matrices
+        # (n_components, n_features, n_features), causing the setter's shape
+        # validation to fail when covariance_type='diag'.
         model.means_     = model.means_[order]
-        model.covars_    = model._covars_[order]
+        model._covars_   = model._covars_[order]
         model.startprob_ = model.startprob_[order]
 
         # Transition matrix: permute both rows and columns

@@ -502,24 +502,60 @@ def _initialize_params(Y, X, K, n, p, T, rng):
     return B_list, Sigma_list, P
 
 
+def _avg_correlation(cov: np.ndarray) -> float:
+    """
+    Average absolute off-diagonal correlation of a covariance matrix.
+    Returns 0 for 1x1 matrices.  Used by _sort_regimes().
+    """
+    n = cov.shape[0]
+    if n == 1:
+        return 0.0
+    std = np.sqrt(np.diag(cov))
+    std = np.where(std > 1e-12, std, 1e-12)
+    corr = cov / np.outer(std, std)
+    mask = ~np.eye(n, dtype=bool)
+    return float(np.abs(corr[mask]).mean())
+
+
 def _sort_regimes(result: 'MSVARResult') -> 'MSVARResult':
     """
-    Sort regimes by unconditional mean of first variable (ascending).
-    This addresses label switching across restarts.
-    """
-    means = []
-    for k in range(result.K):
-        # Unconditional mean: (I - A1 - ... - Ap)^{-1} mu
-        # Approximate: just use the intercept column for simplicity
-        means.append(result.B_list[k][0, 0])   # intercept for variable 0
+    Sort regimes so state 0 = expansion (low correlation) and
+    state 1 = recession (high correlation).
 
-    order = np.argsort(means)
-    result.B_list = [result.B_list[i] for i in order]
-    result.Sigma_list = [result.Sigma_list[i] for i in order]
-    result.P = result.P[np.ix_(order, order)]
-    result.pi = result.pi[order]
-    result.xi_filtered = result.xi_filtered[order, :]
-    result.xi_smoothed = result.xi_smoothed[order, :]
+    The recession regime is characterized by strong cross-indicator
+    correlation — during downturns, macro variables co-move more strongly
+    (unemployment rises as industrial production falls simultaneously,
+    VIX spikes as credit spreads widen, etc.).
+
+    Sorting by average off-diagonal absolute correlation of the
+    regime-conditional covariance matrix Sigma_k is robust to PCA sign
+    flips (unlike PC1 mean sorting) and to sample-size variation
+    (unlike observation-count sorting).
+
+    If correlations are identical across regimes (degenerate case), falls
+    back to sorting by average diagonal variance — higher variance = recession.
+    """
+    scores = []
+    for k in range(result.K):
+        cov   = result.Sigma_list[k]
+        score = _avg_correlation(cov)
+        if score < 1e-10:
+            # Fallback: sort by average variance
+            score = float(np.diag(cov).mean())
+        scores.append(score)
+
+    # Ascending: lower correlation = expansion (state 0)
+    order = np.argsort(scores)
+
+    if np.array_equal(order, np.arange(result.K)):
+        return result   # already correctly ordered
+
+    result.B_list           = [result.B_list[i] for i in order]
+    result.Sigma_list       = [result.Sigma_list[i] for i in order]
+    result.P                = result.P[np.ix_(order, order)]
+    result.pi               = result.pi[order]
+    result.xi_filtered      = result.xi_filtered[order, :]
+    result.xi_smoothed      = result.xi_smoothed[order, :]
     result.eff_sample_sizes = result.eff_sample_sizes[order]
     return result
 
