@@ -127,7 +127,7 @@ cp .env.example .env
 # Add your FRED API key to .env: FRED_API_KEY=your_key_here
 ```
 
-Run notebooks in order: `01` → `02_data_wrangling` → `02_dimensionality_reduction` → `03` → `04` → `05` → `06`.
+Run notebooks in order: `01` → `02_data_wrangling` → `03_dimensionality_reduction` → `04` → `05` → `06` → `07`.
 
 ------------------------------------------------------------------------
 
