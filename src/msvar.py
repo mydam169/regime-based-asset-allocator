@@ -360,7 +360,8 @@ def em_fit(data: np.ndarray, K: int, p: int,
            max_iter: int = 500,
            tol: float = 1e-6,
            random_state: Optional[int] = None,
-           verbose: bool = False) -> 'MSVARResult':
+           verbose: bool = False,
+           sort_method: str = 'trace') -> 'MSVARResult':
     """
     Fit MSMH-VAR(K, p) model via EM algorithm with multiple random restarts.
 
@@ -374,6 +375,12 @@ def em_fit(data: np.ndarray, K: int, p: int,
     tol         : float      — convergence tolerance on log-likelihood
     random_state: int        — seed for reproducibility
     verbose     : bool       — print progress
+    sort_method : str        — regime ordering criterion after fitting.
+                  'trace'    (default) ascending tr(Sigma_k); sign-invariant.
+                  'pc1_mean' ascending unconditional VAR mean of variable 0;
+                             sign-dependent, assumes PC1 loads on unemployment.
+                  'naive'    majority state (most observations) = expansion;
+                             falls back to 'trace' on tie.
 
     Returns
     -------
@@ -442,8 +449,8 @@ def em_fit(data: np.ndarray, K: int, p: int,
                 data=data,
             )
 
-    # Apply label ordering: sort regimes by mean return of first variable
-    best_result = _sort_regimes(best_result)
+    # Apply label ordering
+    best_result = _sort_regimes(best_result, sort_method=sort_method)
 
     return best_result
 
@@ -502,50 +509,66 @@ def _initialize_params(Y, X, K, n, p, T, rng):
     return B_list, Sigma_list, P
 
 
-def _avg_correlation(cov: np.ndarray) -> float:
+def _sort_regimes(result: 'MSVARResult',
+                  sort_method: str = 'trace') -> 'MSVARResult':
     """
-    Average absolute off-diagonal correlation of a covariance matrix.
-    Returns 0 for 1x1 matrices.  Used by _sort_regimes().
+    Sort regimes so state 0 = expansion and state 1 = recession.
+
+    Parameters
+    ----------
+    sort_method : str — ordering criterion, one of:
+
+      'trace' (default)
+          Ascending tr(Sigma_k).  The state with lower total variance is
+          labeled expansion.  Sign-invariant: does not depend on PCA/PLS
+          axis orientation.  Recommended for PLS inputs.
+
+      'pc1_mean'
+          Ascending unconditional VAR mean of variable 0: (I-A1)^{-1}*mu.
+          Assumes variable 0 (PC1) has a positive loading on unemployment.
+          Sign-dependent — may mis-order states if PCA/PLS axis flips.
+          Falls back to the raw intercept if (I-A1) is singular.
+
+      'naive'
+          Ascending state frequency: the majority state (most observations
+          in the argmax of xi_smoothed) is labeled expansion.
+          Falls back to 'trace' on tied counts.
     """
-    n = cov.shape[0]
-    if n == 1:
-        return 0.0
-    std = np.sqrt(np.diag(cov))
-    std = np.where(std > 1e-12, std, 1e-12)
-    corr = cov / np.outer(std, std)
-    mask = ~np.eye(n, dtype=bool)
-    return float(np.abs(corr[mask]).mean())
+    if sort_method == 'trace':
+        traces = [np.trace(result.Sigma_list[k]) for k in range(result.K)]
+        order  = np.argsort(traces)
 
+    elif sort_method == 'pc1_mean':
+        n = result.B_list[0].shape[0]
+        means = []
+        for k in range(result.K):
+            mu_k = result.B_list[k][:, 0]
+            A1_k = result.B_list[k][:, 1:n + 1]
+            try:
+                uncond_mean = np.linalg.solve(np.eye(n) - A1_k, mu_k)
+            except np.linalg.LinAlgError:
+                uncond_mean = mu_k   # fallback: unit-root case
+            means.append(float(uncond_mean[0]))
+        order = np.argsort(means)
 
-def _sort_regimes(result: 'MSVARResult') -> 'MSVARResult':
-    """
-    Sort regimes so state 0 = expansion (low correlation) and
-    state 1 = recession (high correlation).
+    elif sort_method == 'naive':
+        states = np.argmax(result.xi_smoothed, axis=0)
+        counts = np.bincount(states, minlength=result.K)
+        if len(set(counts)) == 1:   # tied
+            warnings.warn(
+                "sort_method='naive': tied state counts — falling back to 'trace'.",
+                UserWarning
+            )
+            traces = [np.trace(result.Sigma_list[k]) for k in range(result.K)]
+            order  = np.argsort(traces)
+        else:
+            order = np.argsort(-counts)  # descending count → expansion first
 
-    The recession regime is characterized by strong cross-indicator
-    correlation — during downturns, macro variables co-move more strongly
-    (unemployment rises as industrial production falls simultaneously,
-    VIX spikes as credit spreads widen, etc.).
-
-    Sorting by average off-diagonal absolute correlation of the
-    regime-conditional covariance matrix Sigma_k is robust to PCA sign
-    flips (unlike PC1 mean sorting) and to sample-size variation
-    (unlike observation-count sorting).
-
-    If correlations are identical across regimes (degenerate case), falls
-    back to sorting by average diagonal variance — higher variance = recession.
-    """
-    scores = []
-    for k in range(result.K):
-        cov   = result.Sigma_list[k]
-        score = _avg_correlation(cov)
-        if score < 1e-10:
-            # Fallback: sort by average variance
-            score = float(np.diag(cov).mean())
-        scores.append(score)
-
-    # Ascending: lower correlation = expansion (state 0)
-    order = np.argsort(scores)
+    else:
+        raise ValueError(
+            f"sort_method must be 'trace', 'pc1_mean', or 'naive'; "
+            f"got '{sort_method}'."
+        )
 
     if np.array_equal(order, np.arange(result.K)):
         return result   # already correctly ordered

@@ -21,10 +21,10 @@ use dates_train[result.p:] when building the state series.
 
 State labeling
 --------------
-_sort_regimes() inside em_fit() reorders states after every restart so
-state 0 = expansion (low PC1 unconditional mean) and state 1 = recession
-(high PC1 unconditional mean).  No manual label flip is needed in the
-notebook — this matches the HMMRegimeModel convention exactly.
+_sort_regimes() inside em_fit() reorders states according to sort_method
+(default 'trace').  Three criteria are available — see HMMRegimeModel and
+em_fit() for full documentation.  Both models use the same sort_method
+parameter so regime labeling is consistent across model variants.
 """
 
 import numpy as np
@@ -52,7 +52,16 @@ class MSVARRegimeModel:
     def __init__(self, n_states: int = 2, p: int = 1,
                  n_restarts: int = 5, max_iter: int = 300,
                  tol: float = 1e-6, random_state: int = 42,
-                 verbose: bool = True):
+                 verbose: bool = True,
+                 sort_method: str = 'trace'):
+        """
+        sort_method : str — regime ordering criterion after fitting.
+                      'trace'    (default) ascending tr(Sigma_k); sign-invariant.
+                      'pc1_mean' ascending unconditional VAR mean of variable 0;
+                                 sign-dependent, assumes PC1 loads on unemployment.
+                      'naive'    majority state = expansion; falls back to
+                                 'trace' on tied counts.
+        """
         self.n_states     = n_states
         self.p            = p
         self.n_restarts   = n_restarts
@@ -60,6 +69,7 @@ class MSVARRegimeModel:
         self.tol          = tol
         self.random_state = random_state
         self.verbose      = verbose
+        self.sort_method  = sort_method
         self._result      = None
 
     def fit(self, X: np.ndarray) -> "MSVARRegimeModel":
@@ -87,12 +97,22 @@ class MSVARRegimeModel:
             tol          = self.tol,
             random_state = self.random_state,
             verbose      = self.verbose,
+            sort_method  = self.sort_method,
         )
         # Print state labeling confirmation — mirrors HMMRegimeModel output
+        print(f"Sort method: '{self.sort_method}'")
         for k in range(self.n_states):
-            intercept = self._result.B_list[k][0, 0]
-            label     = "Expansion" if k == 0 else "Recession"
-            print(f"State {k} = {label}  (PC1 intercept: {intercept:.3f})")
+            n_var = self._result.B_list[k].shape[0]
+            A1_k  = self._result.B_list[k][:, 1:n_var + 1]
+            mu_k  = self._result.B_list[k][:, 0]
+            try:
+                pc1_mean = float(np.linalg.solve(np.eye(n_var) - A1_k, mu_k)[0])
+            except np.linalg.LinAlgError:
+                pc1_mean = float(mu_k[0])
+            trace = float(np.trace(self._result.Sigma_list[k]))
+            label = "Expansion" if k == 0 else "Recession"
+            print(f"State {k} = {label}  "
+                  f"(tr(Σ)={trace:.4f}  PC1_mean={pc1_mean:.3f})")
         print(f"Transition matrix:\n{np.round(self._result.P, 4)}")
         print(f"State durations (months): "
               f"{[f'{d:.1f}' for d in self._result.expected_durations]}")

@@ -12,5 +12,6 @@ SHADE_A   = 0.4            # shading alpha
 LW        = 1.4            # default line width
 
 ASSET_COLS = ["index_fund", "treasury_fund", "gold_fund"]
-N_COMPONENTS = 5
+N_COMPONENTS_PLS = 4
+N_COMPONENTS_PCA = 6
 REDUCTION_METHOD = 'pls'

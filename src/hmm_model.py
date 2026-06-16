@@ -36,17 +36,35 @@ class HMMRegimeModel:
     State labeling
     --------------
     The HMM assigns state labels (0, 1) arbitrarily — there is no guarantee
-    that state 0 corresponds to expansion.  After fitting, _sort_states()
-    reorders states so that state 0 is always expansion (lowest mean of PC1,
-    which loads positively on unemployment) and state 1 is always recession.
-    This ensures consistent labeling across restarts and random seeds.
+    that state 0 corresponds to expansion.  After fitting, _sort_regimes()
+    reorders states according to the criterion set by sort_method:
+
+      'trace'    (default) — ascending tr(Sigma_k).  The state with lower
+                 total variance is labeled expansion.  Sign-invariant: does
+                 not depend on PCA/PLS axis orientation.
+      'pc1_mean' — ascending mean of component 0.  Assumes component 0 has
+                 a positive loading on unemployment (guaranteed for standard
+                 PCA; may fail for PLS if component sign flips).
+      'naive'    — ascending state frequency (argmax of smoothed probs).
+                 The majority state is labeled expansion.  Falls back to
+                 'trace' if counts are tied.  Useful as a sanity check or
+                 when components are uninterpretable.
     """
 
     def __init__(self, n_states: int = 2, n_iter: int = 200,
                  n_restarts: int = 10, tol: float = 1e-4,
                  random_state: int = 42,
-                 covariance_type: str = 'full', # change from diag to full 
-                 constrain_transmat: bool = True):
+                 covariance_type: str = 'diag',
+                 constrain_transmat: bool = True,
+                 sort_method: str = 'trace'):
+        """
+        sort_method : str — criterion for ordering states after fitting.
+                      'trace'    (default) ascending tr(Sigma_k); sign-invariant.
+                      'pc1_mean' ascending mean of component 0 (PCA only; sign-
+                                 dependent, may fail with PLS).
+                      'naive'    majority state = expansion; falls back to
+                                 'trace' on tie.
+        """
         self.n_states           = n_states
         self.n_iter             = n_iter
         self.n_restarts         = n_restarts
@@ -54,6 +72,7 @@ class HMMRegimeModel:
         self.random_state       = random_state
         self.covariance_type    = covariance_type
         self.constrain_transmat = constrain_transmat
+        self.sort_method        = sort_method
         self._model             = None
 
     def fit(self, X: np.ndarray) -> "HMMRegimeModel":
@@ -119,33 +138,82 @@ class HMMRegimeModel:
             raise RuntimeError("All restarts failed — check input data.")
 
         # ── Sort states so state 0 = expansion, state 1 = recession ──────────
-        # Sorting is based on the mean of PC1, which loads positively on
-        # unemployment.  The state with the lower PC1 mean is expansion.
-        best_model = self._sort_states(best_model)
+        best_model = self._sort_regimes(best_model, X=X)
 
         print(f"Best log-likelihood (per sample): {best_loglik:.4f}")
+        print(f"Sort method: '{self.sort_method}'")
         print(f"Transition matrix:\n{best_model.transmat_}")
         print(f"State durations (months): "
               f"{[f'{1/(1-p):.1f}' for p in best_model.transmat_.diagonal()]}")
-        print(f"State 0 = Expansion  (PC1 mean: {best_model.means_[0, 0]:.3f})")
-        print(f"State 1 = Recession  (PC1 mean: {best_model.means_[1, 0]:.3f})")
+        print(f"State 0 = Expansion  (tr(Σ)={np.trace(best_model.covars_[0]):.4f}"
+              f"  PC1_mean={best_model.means_[0, 0]:.3f})")
+        print(f"State 1 = Recession  (tr(Σ)={np.trace(best_model.covars_[1]):.4f}"
+              f"  PC1_mean={best_model.means_[1, 0]:.3f})")
         self._model = best_model
         return self
 
-    def _sort_states(self, model: GaussianHMM) -> GaussianHMM:
+    def _sort_regimes(self, model: GaussianHMM,
+                     X: np.ndarray = None) -> GaussianHMM:
         """
-        Reorder states so state 0 = expansion (low PC1) and state 1 = recession
-        (high PC1).
+        Reorder states so state 0 = expansion and state 1 = recession.
 
-        PC1 is the dominant business-cycle factor with a strong positive loading
-        on unemployment rate.  Sorting by PC1 mean gives a consistent, economically
-        interpretable labeling regardless of the random initialization order.
+        Dispatches to the criterion set by self.sort_method:
 
-        All model parameters that are indexed by state are permuted:
+        'trace' (default)
+            Ascending tr(Sigma_k).  The state with lower total variance is
+            labeled expansion.  Sign-invariant: does not depend on PCA/PLS
+            axis orientation.  Recommended for PLS inputs where component
+            signs are unconstrained.
+
+        'pc1_mean'
+            Ascending mean of component 0 (model.means_[:, 0]).  Assumes
+            component 0 has a positive loading on unemployment — guaranteed
+            for standard PCA on the macro dataset, but may fail for PLS if
+            the first component sign flips between refit windows.
+
+        'naive'
+            Ascending state frequency: the majority state (most observations
+            in the Viterbi sequence) is labeled expansion.  X must be provided.
+            Falls back to 'trace' if counts are tied.  Useful as a sanity
+            check or when component interpretability is unavailable.
+
+        All model parameters indexed by state are permuted:
         means_, covars_, startprob_, transmat_.
         """
-        # Ascending sort on PC1 mean: lowest = expansion (state 0)
-        order = np.argsort(model.means_[:, 0])
+        method = self.sort_method
+
+        if method == 'trace':
+            order = np.argsort([np.trace(c) for c in model.covars_])
+
+        elif method == 'pc1_mean':
+            order = np.argsort(model.means_[:, 0])
+
+        elif method == 'naive':
+            if X is None:
+                import warnings
+                warnings.warn(
+                    "sort_method='naive' requires X — falling back to 'trace'.",
+                    UserWarning
+                )
+                order = np.argsort([np.trace(c) for c in model.covars_])
+            else:
+                states = model.predict(X)
+                counts = np.bincount(states, minlength=self.n_states)
+                if counts[0] == counts[1]:
+                    import warnings
+                    warnings.warn(
+                        "sort_method='naive': tied counts — falling back to 'trace'.",
+                        UserWarning
+                    )
+                    order = np.argsort([np.trace(c) for c in model.covars_])
+                else:
+                    # majority state = expansion (state 0)
+                    order = np.argsort(-counts)   # descending count → expansion first
+        else:
+            raise ValueError(
+                f"sort_method must be 'trace', 'pc1_mean', or 'naive'; "
+                f"got '{method}'."
+            )
 
         if np.array_equal(order, np.arange(self.n_states)):
             return model   # already correctly ordered — nothing to do
