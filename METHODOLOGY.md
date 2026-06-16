@@ -37,13 +37,13 @@ Beyond parameter count, correlated inputs inflate the condition number of the wi
 
 PCA finds directions in macro space that maximize variance in the indicators, regardless of their relevance to asset returns. PLS finds directions that maximally co-vary with asset returns, aligning preprocessing directly to the portfolio objective. This distinction matters when only a subset of macro variation is return-predictive — exactly the case here, where 15 correlated macro series contain significant idiosyncratic noise.
 
-The choice is motivated by Kelly & Pruitt (2015), who show that PLS outperforms PCA as a dimensionality reduction step when the target Y is spanned by only a low-dimensional subspace of X. With three asset return series and 15 macro indicators, this condition is plausibly satisfied.
+The choice is motivated by Kelly & Pruitt (2015), who show that PLS outperforms PCA as a dimensionality reduction step when the target Y is spanned by only a low-dimensional subspace of X. With three asset return series and 15 macro indicators, this condition is plausibly satisfied. The authors also found **3-5 PLS components** sufficient to predict returns.
 
 **Important:** preferring PLS over PCA is not justified by PCA explaining more variance (it always will, by construction) or by VIF analysis (VIF below 5 in this dataset indicates moderate, not severe, multicollinearity). The sole empirical justification is the walk-forward backtest outcome: HMM-PLS Sortino 1.463 vs HMM-PCA 1.305. A single evaluation window is limited evidence and should be interpreted cautiously.
 
 ### Implementation details
 
--   PCA: variance threshold 85%, minimum 2 components retained
+-   PCA: variance threshold \~70% (6 components)
 -   PLS: 4 components, fitted on the training-window macro and asset return series jointly; Y is the raw asset return matrix (no standardization required since all three series are monthly returns on the same scale)
 -   Both: winsorization at ±4 standard deviations after projection, applied independently to training and test projections
 
@@ -55,11 +55,11 @@ The choice is motivated by Kelly & Pruitt (2015), who show that PLS outperforms 
 
 **Gaussian HMM** (`src/hmm_model.py`): Baum-Welch EM with 10 random restarts; diagonal covariance (orthogonal PCA/PLS components justify removing cross-component correlations, reducing parameters from n(n+1)/2 to n per regime); transition matrix initialized to a business-cycle prior (p_stay ≈ 0.95 for expansion, 0.90 for recession) to prevent degenerate EM starts where one state absorbs all observations.
 
-**MSMH-VAR(1)** (`src/msvar.py`): Hamilton filter (forward pass) + Kim smoother (backward pass) within an EM loop, implemented from scratch — no existing Python or R package was available at the time of writing. Numerical safeguards include log-space forward recursion, Cholesky-based emission log-likelihoods, and positive definite regularization in the M-step covariance update. 5 random restarts.
+**MSMH-VAR(1)** (`src/msvar.py`): Hamilton filter (forward pass) + Kim smoother (backward pass) within an EM loop, implemented from scratch. Numerical safeguards include log-space forward recursion, Cholesky-based emission log-likelihoods, and positive definite regularization in the M-step covariance update. 5 random restarts.
 
 ### State ordering
 
-After fitting, states are ordered by the trace of the regime-conditional covariance matrix $tr(\Sigma_k)$. The state with the higher total variance is labeled recession (state 1). This criterion is sign-invariant — unlike sorting by the mean of a specific component, it does not depend on the orientation of the PCA or PLS axes, which can flip sign between refit windows. It is equivalent to sorting by the second moment scalar $s_k = tr(\Sigma_k) + \lVert μ_k \lVert^2$ when means are small relative to variances, which is the case here after robust scaling.
+After fitting, states are ordered by the trace of the regime-conditional covariance matrix $tr(\Sigma_k)$ by default. The state with the higher total variance is labeled recession (state 1). This criterion is sign-invariant — unlike sorting by the mean of a specific component, it does not depend on the orientation of the PCA or PLS axes, which can flip sign between refit windows. It is equivalent to sorting by the second moment scalar $s_k = tr(\Sigma_k) + \lVert μ_k \lVert^2$ when means are small relative to variances, which is the case here after robust scaling.
 
 ### Filtered vs. smoothed probabilities
 
