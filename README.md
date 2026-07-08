@@ -48,7 +48,7 @@ This project builds a regime-aware allocation framework where portfolio weights 
 | 4 | Unconditional GMV (WF) | 1.325 | 0.792 | 10.7% | 10.1% | −21.2% |
 | 5 | MSVAR GMV (PCA, WF) † | 1.317 | 0.787 | 10.7% | 10.2% | −21.2% |
 | 6 | Buy & Hold Equity | 1.300 | 0.871 | 17.2% | 16.9% | −24.0% |
-| 7 | 60/40 (static) | 0.948 | 0.604 | 10.0% | 12.8% | −25.8% |
+| 7 | 60/40 | 0.948 | 0.604 | 10.0% | 12.8% | −25.8% |
 
 † MSVAR VAR mean structure not economically interpretable on PCA components; included as robustness check only.
 
