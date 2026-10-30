@@ -4,7 +4,7 @@
 
 A rigorous comparison of Gaussian HMM and MSMH-VAR(1) models for macroeconomic regime detection, applied to a three-asset tactical allocation portfolio (U.S. equities, Treasuries, gold). Regime-conditional mean-variance optimization via cvxpy with Ledoit-Wolf and Bayes-Stein shrinkage. Out-of-sample evaluation via expanding-window walk-forward backtesting with filtered regime probabilities.
 
-→ [Methodology](docs/METHODOLOGY.md) · [Results](docs/RESULTS_SUMMARY.md)
+→ [Methodology](METHODOLOGY.md) · [Results](RESULTS_SUMMARY.md)
 
 ![](outputs/figures/hmm_pls_states_vs_nber_vix.png)
 
@@ -30,7 +30,7 @@ This project builds a regime-aware allocation framework where portfolio weights 
 
 **PLS over PCA:** PLS finds latent macro directions that maximally co-vary with asset returns, aligning preprocessing to the portfolio objective rather than to variance in the macro indicators. The empirical case for PLS rests on two findings: the walk-forward backtest (HMM-PLS Sortino 1.512 vs HMM-PCA 1.381), and the fact that only HMM-PLS correctly detects the 1990–91 recession — a short, oil-shock-driven contraction that all PCA-based and no-reduction variants miss entirely. See [Methodology](METHODOLOGY.md) for full discussion.
 
-**Walk-forward over fixed split:** At each annual refit, all model components are re-estimated on the full expanded dataset — scaler, dimensionality reducer, regime model, and regime-conditional return moments. Between refits, regime assignment uses filtered probabilities only (no look-ahead), with a one-month signal lag before weights are applied. See [Methodology](docs/METHODOLOGY.md) for full design details.
+**Walk-forward over fixed split:** At each annual refit, all model components are re-estimated on the full expanded dataset — scaler, dimensionality reducer, regime model, and regime-conditional return moments. Between refits, regime assignment uses filtered probabilities only (no look-ahead), with a one-month signal lag before weights are applied. See [Methodology](METHODOLOGY.md) for full design details.
 
 ------------------------------------------------------------------------
 
@@ -40,15 +40,15 @@ This project builds a regime-aware allocation framework where portfolio weights 
 
 *Expanding-window walk-forward · Annual refit · Filtered regime probabilities · RF: 2.66% p.a. · 10 bps one-way transaction costs · Ranked by Sortino ratio*
 
-| Rank | Strategy | Sortino | Sharpe | Ann. Return | Volatility | Max DD |
-|-----------|-----------|-----------|-----------|-----------|-----------|-----------|
-| 1 | Equal Weight | 1.590 | 0.928 | 12.0% | 9.9% | −19.6% |
-| 2 | **HMM GMV (PLS, WF)** | **1.512** | **0.888** | **11.7%** | **10.0%** | **−20.0%** |
-| 3 | HMM GMV (PCA, WF) | 1.381 | 0.812 | 10.9% | 10.2% | −20.4% |
-| 4 | Unconditional GMV (WF) | 1.325 | 0.792 | 10.7% | 10.1% | −21.2% |
-| 5 | MSVAR GMV (PCA, WF) † | 1.317 | 0.787 | 10.7% | 10.2% | −21.2% |
-| 6 | Buy & Hold Equity | 1.300 | 0.871 | 17.2% | 16.9% | −24.0% |
-| 7 | 60/40 | 0.948 | 0.604 | 10.0% | 12.8% | −25.8% |
+| Rank | Strategy | Sortino | Sharpe | Ann. Return | Volatility | Max DD | VaR 95% (monthly) | CVaR 95% (monthly) |
+|-----------|-----------|-----------|-----------|-----------|-----------|-----------|-----------|-----------|
+| 1 | Equal Weight | 1.590 | 0.928 | 12.0% | 9.9% | −19.6% | 3.1% | 4.9% |
+| 2 | **HMM GMV (PLS, WF)** | **1.512** | **0.888** | **11.7%** | **10.0%** | **−20.0%** | **3.2%** | **5.0%** |
+| 3 | HMM GMV (PCA, WF) | 1.381 | 0.812 | 10.9% | 10.2% | −20.4% | 3.4% | 5.0% |
+| 4 | Unconditional GMV (WF) | 1.325 | 0.792 | 10.7% | 10.1% | −21.2% | 3.4% | 5.1% |
+| 5 | MSVAR GMV (PCA, WF) † | 1.317 | 0.787 | 10.7% | 10.2% | −21.2% | 3.3% | 5.1% |
+| 6 | Buy & Hold Equity | 1.300 | 0.871 | 17.2% | 16.9% | −24.0% | 8.0% | 9.5% |
+| 7 | 60/40 | 0.948 | 0.604 | 10.0% | 12.8% | −25.8% | 5.6% | 7.0% |
 
 † MSVAR VAR mean structure not economically interpretable on PCA components; included as robustness check only.
 
@@ -56,7 +56,7 @@ Sortino is the primary criterion since it penalizes only downside volatility. Th
 
 **The first-order effect of gold:** The top two strategies — equal weight and HMM-PLS — are those with the highest gold allocation relative to a standard equity-bond portfolio. Gold's low or negative correlation with both equities and Treasuries, particularly during the 2022 rate-hike shock when both traditional asset classes fell simultaneously, provides the tail protection that drives the Sortino advantage. Equal weight captures this unconditionally via a permanent 33% allocation; HMM-PLS captures it conditionally by rotating toward gold during detected contraction regimes.
 
-**HMM-PLS is the top-ranked model-based strategy**, outperforming 60/40 by 167 bps of annualized return at 277 bps lower volatility and 576 bps shallower maximum drawdown. Against the unconditional GMV walk-forward — the most natural model-free benchmark, using the same expanding-window discipline but no regime information — HMM-PLS adds 80 bps of annualized return and +0.187 Sortino, isolating the contribution of regime detection itself.
+**HMM-PLS is the top-ranked model-based strategy**, outperforming 60/40 by 166 bps of annualized return at 274 bps lower volatility and 573 bps shallower maximum drawdown, with a monthly 95% CVaR of 5.0% against 7.0%. Against the unconditional GMV walk-forward — the most natural model-free benchmark, using the same expanding-window discipline but no regime information — HMM-PLS adds 98 bps of annualized return and +0.187 Sortino, isolating the contribution of regime detection itself.
 
 ### Subperiod Analysis
 

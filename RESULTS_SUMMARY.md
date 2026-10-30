@@ -42,7 +42,7 @@ The result does not overturn the decision to use MSVAR as a robustness check. Th
 
 ### 3c. HMM without dimensionality reduction
 
-HMM on all 15 raw robust-scaled indicators (no PCA or PLS) achieves a Sortino of **1.372** and annualized return of **10.9%**, outperforming HMM-PCA (1.381 — nearly identical) but falling short of HMM-PLS (1.512). This confirms that dimensionality reduction does not discard critical regime signal, and that it is the PLS return-predictive alignment rather than the compression itself that drives the primary result.
+HMM on all 15 raw robust-scaled indicators (no PCA or PLS) achieves a Sortino of **1.372** and annualized return of **10.9%**, nearly identical to HMM-PCA (1.381) but falling short of HMM-PLS (1.512). This confirms that dimensionality reduction does not discard critical regime signal, and that it is the PLS return-predictive alignment rather than the compression itself that drives the primary result.
 
 ------------------------------------------------------------------------
 

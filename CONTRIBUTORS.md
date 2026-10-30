@@ -12,7 +12,7 @@ Conducted VIF, PCA, and PLS analysis on 15 macro indicators to select the prepro
 
 -   Implemented a manual forward algorithm for filtered probabilities (distinct from hmmlearn's smoothed `predict_proba`); added a regime-sorting method (`_sort_states()`) for consistent regime labeling across restarts based on regime-conditional covariance trace
 
-**MSMH-VAR(1) implementation** (`src/msvar.py`, `src/msvar_model.py`, `notebooks/05_msvar_experiments.ipynb`) -
+**MSMH-VAR(1) implementation** (`src/msvar.py`, `src/msvar_model.py`, `notebooks/05_msvar_experiments.ipynb`)
 
 -   Built the full MSMH-VAR(1) estimation engine from scratch (no existing Python/R package available)
 
@@ -33,7 +33,7 @@ Implemented expanding-window walk-forward backtesting with annual refit to avoid
 
 ## Asad Ali Akhtar — [\@AsadAliAkhtar](https://github.com/AsadAliAkhtar)
 
-**Data extraction** (`notebooks/01_data_extraction.ipynb`): Extracted13 macroeconomic indicators and three asset price series (VFINX, VUSTX, gold) from various sources (Sample: January 1990 – December 2025)
+**Data extraction** (`notebooks/01_data_extraction.ipynb`): Extracted 13 macroeconomic indicators and three asset price series (VFINX, VUSTX, gold) from various sources (Sample: January 1990 – December 2025)
 
 **Data wrangling and preprocessing** (`notebooks/02_data_wrangling.ipynb`)
 
@@ -45,9 +45,9 @@ Implemented expanding-window walk-forward backtesting with annual refit to avoid
 
 ## Khang Manh Bui
 
-**Fixed-split backtesting engine** (`src/backtest.py`, `notebooks/05_backtesting.ipynb`)
+**Fixed-split backtesting engine** (`src/backtest.py`, `notebooks/06_backtesting.ipynb`)
 
--   Designed and implemented the production backtest with drift-adjusted transaction costs -
+-   Designed and implemented the production backtest with drift-adjusted transaction costs
 
 -   Ensured one-month signal lag to prevent look-ahead bias; 10 bps one-way transaction costs
 
